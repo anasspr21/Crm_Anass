@@ -219,7 +219,7 @@ function CanvasEditor({
         updated_at: new Date().toISOString(),
       }).eq('id', canvas.id);
       setLastSaved(new Date());
-      onSaved({ ...canvas, name: canvasName, canvas_json: json, updated_at: new Date().toISOString() });
+      onSaved({ ...canvas, name: canvasName, canvas_json: json as Record<string, unknown>, updated_at: new Date().toISOString() });
     } finally {
       setSaving(false);
     }

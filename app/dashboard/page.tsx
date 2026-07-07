@@ -2,10 +2,22 @@
 
 export const dynamic = 'force-dynamic';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import AppShell from '@/components/layout/AppShell';
-import { DivisionKey, DIVISIONS } from '@/lib/divisions';
-import { TrendingUp, TrendingDown, Users, CheckCircle, Clock, Zap } from 'lucide-react';
+import { DivisionKey } from '@/lib/divisions';
+import { TrendingUp, TrendingDown, Users, CheckCircle, Clock, Zap, Plus, X } from 'lucide-react';
+import { createSupabaseClient } from '@/lib/supabase/client';
+import type { Project, Task } from '@/lib/types';
+
+// ── Types for Dashboard ────────────────────────────────────────────────────────
+interface TeamMember {
+  id: string;
+  name: string;
+  role: string;
+  email: string | null;
+  status: 'online' | 'offline' | 'away';
+  color: string;
+}
 
 // ── Neumorphic stat tile ───────────────────────────────────────────────────────
 function StatTile({
@@ -59,8 +71,9 @@ function StatTile({
 }
 
 // ── Task with neumorphic checkbox ──────────────────────────────────────────────
-function TaskItem({ label, done, color }: { label: string; done: boolean; color: string }) {
-  const [checked, setChecked] = useState(done);
+function TaskItem({ task, onToggle }: { task: Task; onToggle: (t: Task) => void }) {
+  const done = task.status === 'done';
+  const color = task.priority === 'high' || task.priority === 'urgent' ? '#D85A30' : '#378ADD';
   return (
     <div
       style={{
@@ -71,18 +84,18 @@ function TaskItem({ label, done, color }: { label: string; done: boolean; color:
         borderBottom: '1px solid rgba(0,0,0,0.04)',
       }}
     >
-      <div className={`nm-checkbox ${checked ? 'checked' : ''}`} onClick={() => setChecked(!checked)}
-        style={checked ? { '--checkmark-color': color } as React.CSSProperties : undefined}
+      <div className={`nm-checkbox ${done ? 'checked' : ''}`} onClick={() => onToggle(task)}
+        style={done ? { '--checkmark-color': color } as React.CSSProperties : undefined}
       />
       <span
         style={{
           fontSize: '0.8125rem',
-          color: checked ? 'var(--text-muted)' : 'var(--text-primary)',
-          textDecoration: checked ? 'line-through' : 'none',
-          fontWeight: checked ? 300 : 400,
+          color: done ? 'var(--text-muted)' : 'var(--text-primary)',
+          textDecoration: done ? 'line-through' : 'none',
+          fontWeight: done ? 300 : 400,
         }}
       >
-        {label}
+        {task.title}
       </span>
       <div style={{ marginLeft: 'auto', width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0 }} />
     </div>
@@ -90,7 +103,9 @@ function TaskItem({ label, done, color }: { label: string; done: boolean; color:
 }
 
 // ── Project hero card (column A) ───────────────────────────────────────────────
-function ProjectCard({ delay }: { delay: number }) {
+function ProjectCard({ delay, projects }: { delay: number; projects: Project[] }) {
+  const latestProject = projects.length > 0 ? projects[0] : null;
+
   return (
     <div
       className={`nm-card fade-up fade-up-${delay}`}
@@ -143,7 +158,7 @@ function ProjectCard({ delay }: { delay: number }) {
           }}
         >
           <Zap size={10} />
-          EN COURS
+          {latestProject ? (latestProject.status === 'active' ? 'EN COURS' : 'PROJET') : 'AUCUN PROJET'}
         </div>
         <h2
           style={{
@@ -154,10 +169,10 @@ function ProjectCard({ delay }: { delay: number }) {
             lineHeight: 1.2,
           }}
         >
-          Rénovation Showroom Casablanca
+          {latestProject?.name || 'Créer un projet pour commencer'}
         </h2>
         <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.7)', margin: 0 }}>
-          Projet Agencement · Phase 2
+          {latestProject ? `Projet ${latestProject.division} · Client: ${latestProject.client_name || 'N/A'}` : 'Veuillez ajouter un projet depuis l\'onglet Projets.'}
         </p>
       </div>
 
@@ -167,20 +182,20 @@ function ProjectCard({ delay }: { delay: number }) {
         <div style={{ marginBottom: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
             <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--text-muted)' }}>Avancement global</span>
-            <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: '0.9rem', color: 'var(--text-primary)' }}>68%</span>
+            <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: '0.9rem', color: 'var(--text-primary)' }}>{latestProject?.progress || 0}%</span>
           </div>
           <div className="progress-track">
-            <div className="progress-fill" style={{ width: '68%' }} />
+            <div className="progress-fill" style={{ width: `${latestProject?.progress || 0}%` }} />
           </div>
         </div>
 
         {/* Stats row */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
           {[
-            { label: 'Tâches', value: '24 / 35' },
-            { label: 'Jours restants', value: '12' },
-            { label: 'Documents', value: '48' },
-            { label: 'Réunions', value: '6' },
+            { label: 'Projets totaux', value: projects.length.toString() },
+            { label: 'Statut', value: latestProject?.status || 'N/A' },
+            { label: 'Priorité', value: latestProject?.priority || 'N/A' },
+            { label: 'Budget', value: latestProject?.budget ? `${latestProject.budget} DH` : '-' },
           ].map(({ label, value }) => (
             <div
               key={label}
@@ -191,34 +206,10 @@ function ProjectCard({ delay }: { delay: number }) {
                 boxShadow: 'var(--raised-xs)',
               }}
             >
-              <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: '1.1rem' }}>{value}</div>
+              <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: '1.1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
               <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 500 }}>{label}</div>
             </div>
           ))}
-        </div>
-
-        {/* Avatar stack */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div className="avatar-stack">
-            {['AE', 'MB', 'KD', 'SL'].map((initials, i) => (
-              <div
-                key={i}
-                className="avatar"
-                style={{
-                  background: `linear-gradient(135deg, ${['#4A62D8','#1D9E75','#D85A30','#7F77DD'][i]}, ${['#7254C8','#378ADD','#C4517A','#1D9E75'][i]})`,
-                }}
-              >
-                {initials}
-              </div>
-            ))}
-            <div
-              className="avatar"
-              style={{ background: 'var(--bg)', color: 'var(--text-muted)', fontSize: '0.65rem', boxShadow: 'var(--raised-xs)' }}
-            >
-              +2
-            </div>
-          </div>
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>6 membres</span>
         </div>
       </div>
     </div>
@@ -226,15 +217,7 @@ function ProjectCard({ delay }: { delay: number }) {
 }
 
 // ── Team roster (column C) ────────────────────────────────────────────────────
-function TeamRosterCard({ delay }: { delay: number }) {
-  const members = [
-    { name: 'Anass Elhafdaoui', role: 'Chef de projet', hours: '42h', status: 'online',  color: '#4A62D8' },
-    { name: 'Mariam Benali',    role: 'Architecte',     hours: '38h', status: 'online',  color: '#1D9E75' },
-    { name: 'Karim Daoudi',     role: 'Ingénieur',      hours: '35h', status: 'away',    color: '#D85A30' },
-    { name: 'Sofia Lahlou',     role: 'Designer',       hours: '28h', status: 'offline', color: '#7F77DD' },
-    { name: 'Youssef Amrani',   role: 'Commercial',     hours: '31h', status: 'online',  color: '#378ADD' },
-  ];
-
+function TeamRosterCard({ delay, members, onDelete }: { delay: number; members: TeamMember[]; onDelete: (id: string) => void }) {
   return (
     <div className={`nm-card-sm fade-up fade-up-${delay}`} style={{ padding: '22px 20px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18 }}>
@@ -242,9 +225,13 @@ function TeamRosterCard({ delay }: { delay: number }) {
         <h3 className="heading" style={{ fontSize: '1rem', margin: 0 }}>Équipe</h3>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {members.map((m) => (
+        {members.length === 0 ? (
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center', padding: '10px 0' }}>
+            Aucun membre. Invitez quelqu'un !
+          </div>
+        ) : members.map((m) => (
           <div
-            key={m.name}
+            key={m.id}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -272,7 +259,7 @@ function TeamRosterCard({ delay }: { delay: number }) {
                   color: '#fff',
                 }}
               >
-                {m.name.split(' ').map(n => n[0]).join('')}
+                {m.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()}
               </div>
               <div
                 className={`status-dot status-${m.status}`}
@@ -285,20 +272,18 @@ function TeamRosterCard({ delay }: { delay: number }) {
               </div>
               <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{m.role}</div>
             </div>
-            <span
+            <button
+              onClick={() => onDelete(m.id)}
               style={{
-                fontSize: '0.65rem',
-                fontWeight: 600,
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
                 color: 'var(--text-muted)',
-                padding: '3px 8px',
-                borderRadius: 6,
-                boxShadow: 'var(--raised-xs)',
-                background: 'var(--bg)',
-                flexShrink: 0,
+                padding: '4px',
               }}
             >
-              {m.hours}
-            </span>
+              <X size={14} />
+            </button>
           </div>
         ))}
       </div>
@@ -309,22 +294,27 @@ function TeamRosterCard({ delay }: { delay: number }) {
 // ── Roadmap timeline (section 2) ──────────────────────────────────────────────
 const MONTHS = ['Janv', 'Févr', 'Mars', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sept', 'Oct', 'Nov', 'Déc'];
 
-const ROADMAP_ITEMS = [
-  { label: 'Conception',        left: '0%',   width: '18%', color: '#4A62D8', division: 'Développement' },
-  { label: 'Prototype',         left: '16%',  width: '22%', color: '#7254C8', division: 'Étude Technique' },
-  { label: 'Agencement Phase 1',left: '8%',   width: '30%', color: '#1D9E75', division: 'Agencement' },
-  { label: 'Import matériaux',  left: '32%',  width: '20%', color: '#D85A30', division: 'Importation' },
-  { label: 'Finitions',         left: '48%',  width: '25%', color: '#C4517A', division: 'Divers' },
-  { label: 'Livraison',         left: '70%',  width: '15%', color: '#1D9E75', division: 'Agencement' },
-];
-
 const todayPct = `${(new Date().getMonth() / 11) * 100}%`;
 
-function RoadmapCard() {
+function RoadmapCard({ projects }: { projects: Project[] }) {
+  // Translate projects into roadmap items spanning some width
+  // This is a simple visual approximation for the dashboard
+  const ROADMAP_ITEMS = projects.slice(0, 6).map((p, index) => {
+    const colors = ['#4A62D8', '#7254C8', '#1D9E75', '#D85A30', '#C4517A'];
+    const color = colors[index % colors.length];
+    return {
+      label: p.name,
+      left: `${(index * 10) % 60}%`, // Fake staggered start
+      width: `${20 + (p.progress || 0) / 2}%`, // Fake width based on progress
+      color,
+      division: p.division,
+    };
+  });
+
   return (
     <div className="nm-card fade-up fade-up-4" style={{ padding: '28px 32px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
-        <h3 className="heading" style={{ fontSize: '1.1rem', margin: 0 }}>Feuille de route</h3>
+        <h3 className="heading" style={{ fontSize: '1.1rem', margin: 0 }}>Feuille de route des projets</h3>
         <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>2026</span>
       </div>
 
@@ -365,8 +355,10 @@ function RoadmapCard() {
         </div>
 
         {/* Bars */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 28 }}>
-          {ROADMAP_ITEMS.map((item) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 28, minHeight: 100 }}>
+          {ROADMAP_ITEMS.length === 0 ? (
+            <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem', padding: '20px 0' }}>Aucun projet pour la feuille de route.</div>
+          ) : ROADMAP_ITEMS.map((item) => (
             <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ width: 110, flexShrink: 0 }}>
                 <div className="truncate" style={{ fontSize: '0.7rem', fontWeight: 500 }}>
@@ -399,10 +391,6 @@ const INTEGRATIONS = [
   { name: 'Vercel',      icon: '▲',   connected: true,  color: '#000' },
   { name: 'GitHub',      icon: '🐙',  connected: true,  color: '#333' },
   { name: 'Google Cal',  icon: '📅',  connected: false, color: '#4285F4' },
-  { name: 'Slack',       icon: '💬',  connected: false, color: '#4A154B' },
-  { name: 'Notion',      icon: '📝',  connected: false, color: '#000' },
-  { name: 'Figma',       icon: '🎨',  connected: true,  color: '#F24E1E' },
-  { name: 'Drive',       icon: '📁',  connected: false, color: '#0F9D58' },
 ];
 
 function IntegrationGrid() {
@@ -439,74 +427,56 @@ function IntegrationGrid() {
 }
 
 // ── Invite card ───────────────────────────────────────────────────────────────
-const PENDING = [
-  { email: 'hamid.benali@mail.com', since: 'Il y a 2j' },
-  { email: 'nadia.tazi@corp.ma',    since: 'Il y a 5j' },
-];
-
-function InviteCard() {
+function InviteCard({ onAdd }: { onAdd: (name: string, role: string, email: string) => void }) {
+  const [name, setName] = useState('');
+  const [role, setRole] = useState('');
   const [email, setEmail] = useState('');
+
+  const handleSubmit = () => {
+    if (name && role) {
+      onAdd(name, role, email);
+      setName('');
+      setRole('');
+      setEmail('');
+    }
+  };
+
   return (
     <div className="nm-card-sm" style={{ padding: '22px 20px' }}>
-      <h3 className="heading" style={{ fontSize: '1rem', marginBottom: 6 }}>Inviter un membre</h3>
+      <h3 className="heading" style={{ fontSize: '1rem', marginBottom: 6 }}>Ajouter un membre</h3>
       <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 18 }}>
-        Partagez l&apos;accès à votre espace de travail
+        Gérez votre équipe directement ici.
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
         <input
           className="nm-input"
+          type="text"
+          placeholder="Nom complet"
+          value={name}
+          onChange={e => setName(e.target.value)}
+        />
+        <input
+          className="nm-input"
+          type="text"
+          placeholder="Rôle (ex: Architecte)"
+          value={role}
+          onChange={e => setRole(e.target.value)}
+        />
+        <input
+          className="nm-input"
           type="email"
-          placeholder="email@exemple.com"
+          placeholder="Email (optionnel)"
           value={email}
           onChange={e => setEmail(e.target.value)}
         />
         <button
           className="nm-btn nm-btn-primary"
           style={{ justifyContent: 'center' }}
-          onClick={() => setEmail('')}
+          onClick={handleSubmit}
+          disabled={!name || !role}
         >
-          Envoyer l&apos;invitation
+          <Plus size={16} style={{ marginRight: 6 }}/> Ajouter à l'équipe
         </button>
-      </div>
-      <div>
-        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 500, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          En attente
-        </div>
-        {PENDING.map((p) => (
-          <div
-            key={p.email}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              padding: '8px 12px',
-              borderRadius: 8,
-              boxShadow: 'var(--raised-xs)',
-              marginBottom: 6,
-              background: 'var(--bg)',
-            }}
-          >
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="truncate" style={{ fontSize: '0.775rem', fontWeight: 500 }}>
-                {p.email}
-              </div>
-              <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{p.since}</div>
-            </div>
-            <button
-              style={{
-                background: 'none',
-                border: 'none',
-                fontSize: '0.7rem',
-                color: '#378ADD',
-                cursor: 'pointer',
-                fontWeight: 600,
-                padding: 0,
-              }}
-            >
-              Renvoyer
-            </button>
-          </div>
-        ))}
       </div>
     </div>
   );
@@ -516,13 +486,58 @@ function InviteCard() {
 export default function DashboardPage() {
   const [activeDivision, setActiveDivision] = useState<DivisionKey | null>(null);
 
-  const tasks = [
-    { label: 'Valider les plans d\'agencement', done: true,  color: '#1D9E75' },
-    { label: 'Commander les matériaux Phase 2', done: true,  color: '#D85A30' },
-    { label: 'Réunion client — maquette 3D',    done: false, color: '#378ADD' },
-    { label: 'Réviser le budget prévisionnel',   done: false, color: '#7F77DD' },
-    { label: 'Déposer dossier technique mairie', done: false, color: '#D85A30' },
-  ];
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const supabase = createSupabaseClient();
+
+  useEffect(() => {
+    const fetchData = async () => {
+      setIsLoading(true);
+      // Fetch Projects
+      let pQuery = supabase.from('projects').select('*').order('created_at', { ascending: false });
+      if (activeDivision) pQuery = pQuery.eq('division', activeDivision);
+      const { data: pData } = await pQuery;
+      
+      // Fetch Tasks
+      let tQuery = supabase.from('tasks').select('*').order('created_at', { ascending: false }).limit(5);
+      const { data: tData } = await tQuery;
+
+      // Fetch Members
+      const { data: mData } = await supabase.from('team_members').select('*').order('created_at', { ascending: true });
+
+      if (pData) setProjects(pData as Project[]);
+      if (tData) setTasks(tData as Task[]);
+      if (mData) setMembers(mData as TeamMember[]);
+
+      setIsLoading(false);
+    };
+    fetchData();
+  }, [activeDivision]);
+
+  const toggleTask = async (task: Task) => {
+    const newStatus = task.status === 'done' ? 'todo' : 'done';
+    setTasks(tasks.map(t => t.id === task.id ? { ...t, status: newStatus } : t));
+    await supabase.from('tasks').update({ status: newStatus }).eq('id', task.id);
+  };
+
+  const handleAddMember = async (name: string, role: string, email: string) => {
+    const colors = ['#4A62D8', '#1D9E75', '#D85A30', '#7F77DD', '#378ADD'];
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    const newMember = { name, role, email, status: 'online', color };
+    
+    const { data } = await supabase.from('team_members').insert([newMember]).select().single();
+    if (data) {
+      setMembers([...members, data as TeamMember]);
+    }
+  };
+
+  const handleDeleteMember = async (id: string) => {
+    setMembers(members.filter(m => m.id !== id));
+    await supabase.from('team_members').delete().eq('id', id);
+  };
 
   return (
     <AppShell activeDivision={activeDivision} onDivisionChange={setActiveDivision}>
@@ -545,44 +560,48 @@ export default function DashboardPage() {
             gridTemplateRows: 'auto auto',
             gap: 18,
             marginBottom: 18,
+            opacity: isLoading ? 0.5 : 1,
+            transition: 'opacity 0.2s',
           }}
         >
           {/* Column A — Project card (tall) */}
-          <ProjectCard delay={1} />
+          <ProjectCard delay={1} projects={projects} />
 
           {/* Column B — Stat tiles + task list */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-            <StatTile label="Projets actifs"    value="7"    trend="+2"  trendUp icon={CheckCircle} color="#1D9E75" delay={2} />
-            <StatTile label="Tâches cette sem." value="24"   trend="+8"  trendUp icon={Clock}       color="#378ADD" delay={3} />
-            <StatTile label="Heures facturées"  value="168h" trend="-4h" trendUp={false} icon={Zap} color="#D85A30" delay={4} />
+            <StatTile label="Projets actifs"    value={projects.filter(p => p.status === 'active').length.toString()}    trend=""  trendUp icon={CheckCircle} color="#1D9E75" delay={2} />
+            <StatTile label="Tâches récentes" value={tasks.length.toString()}   trend=""  trendUp icon={Clock}       color="#378ADD" delay={3} />
+            <StatTile label="Membres équipe"  value={members.length.toString()} trend="" trendUp icon={Users} color="#D85A30" delay={4} />
 
             {/* Task list */}
-            <div className="nm-card-sm fade-up fade-up-5" style={{ padding: '20px 22px' }}>
+            <div className="nm-card-sm fade-up fade-up-5" style={{ padding: '20px 22px', flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <CheckCircle size={14} style={{ color: 'var(--text-muted)' }} />
-                <h3 className="heading" style={{ fontSize: '0.95rem', margin: 0 }}>Tâches du jour</h3>
+                <h3 className="heading" style={{ fontSize: '0.95rem', margin: 0 }}>Dernières tâches</h3>
               </div>
               <div>
-                {tasks.map((t) => (
-                  <TaskItem key={t.label} label={t.label} done={t.done} color={t.color} />
+                {tasks.length === 0 ? (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', padding: '10px 0' }}>Aucune tâche.</div>
+                ) : tasks.map((t) => (
+                  <TaskItem key={t.id} task={t} onToggle={toggleTask} />
                 ))}
               </div>
             </div>
           </div>
 
           {/* Column C — Team roster */}
-          <TeamRosterCard delay={2} />
+          <TeamRosterCard delay={2} members={members} onDelete={handleDeleteMember} />
         </div>
 
         {/* ── Section 2 — Roadmap ── */}
         <div style={{ marginBottom: 18 }}>
-          <RoadmapCard />
+          <RoadmapCard projects={projects} />
         </div>
 
         {/* ── Section 3 — Integrations + Invite ── */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
           <IntegrationGrid />
-          <InviteCard />
+          <InviteCard onAdd={handleAddMember} />
         </div>
       </div>
     </AppShell>

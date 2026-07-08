@@ -548,29 +548,16 @@ export default function FilesPage() {
     await Promise.all(fileList.map(async (file, i) => {
       const path = `${division}/${projectId}/${selectedFolderId}/${Date.now()}_${file.name}`;
       try {
-        // Use XHR for progress tracking
-        await new Promise<void>((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-          xhr.upload.addEventListener('progress', (e) => {
-            if (e.lengthComputable) {
-              const pct = Math.round((e.loaded / e.total) * 90);
-              setUploads(prev => prev.map((u, idx) => idx === i ? { ...u, progress: pct } : u));
-            }
-          });
-          xhr.addEventListener('load', () => {
-            if (xhr.status >= 200 && xhr.status < 300) resolve();
-            else reject(new Error(xhr.statusText));
-          });
-          xhr.addEventListener('error', reject);
-
-          // Supabase Storage REST endpoint
-          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-          const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-          xhr.open('POST', `${supabaseUrl}/storage/v1/object/files/${encodeURIComponent(path)}`);
-          xhr.setRequestHeader('Authorization', `Bearer ${anonKey}`);
-          xhr.setRequestHeader('x-upsert', 'true');
-          xhr.send(file);
+        const { error: uploadError } = await supabase.storage.from('files').upload(path, file, {
+          upsert: true,
+          // Supplying upload progress
+          onUploadProgress: (progress) => {
+            const pct = Math.round((progress.loaded / progress.total) * 90);
+            setUploads(prev => prev.map((u, idx) => idx === i ? { ...u, progress: pct } : u));
+          }
         });
+
+        if (uploadError) throw uploadError;
 
         // Insert DB record
         await supabase.from('files').insert({
@@ -591,7 +578,8 @@ export default function FilesPage() {
         }).throwOnError().catch(() => null);
 
         setUploads(prev => prev.map((u, idx) => idx === i ? { ...u, progress: 100, done: true } : u));
-      } catch {
+      } catch (err) {
+        console.error('Upload error:', err);
         setUploads(prev => prev.map((u, idx) => idx === i ? { ...u, error: true, progress: 0 } : u));
       }
     }));

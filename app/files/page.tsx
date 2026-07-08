@@ -551,7 +551,7 @@ export default function FilesPage() {
         const { error: uploadError } = await supabase.storage.from('files').upload(path, file, {
           upsert: true,
           // Supplying upload progress
-          onUploadProgress: (progress) => {
+          onUploadProgress: (progress: any) => {
             const pct = Math.round((progress.loaded / progress.total) * 90);
             setUploads(prev => prev.map((u, idx) => idx === i ? { ...u, progress: pct } : u));
           }

@@ -2,38 +2,21 @@
 
 export const dynamic = 'force-dynamic';
 
-import { useState, useEffect, useCallback, useRef, DragEvent } from 'react';
+import { useState, useEffect, useRef, DragEvent } from 'react';
 import AppShell from '@/components/layout/AppShell';
-import { DivisionKey, DIVISIONS, getDivisionColor } from '@/lib/divisions';
+import { DivisionKey, DIVISIONS, DIVISION_MAP, getDivisionColor } from '@/lib/divisions';
 import { createSupabaseClient } from '@/lib/supabase/client';
 import {
-  FolderOpen, FolderPlus, Upload, ChevronRight, ChevronDown,
-  FileText, FileImage, File, Trash2, Download, Search, Grid3X3,
-  List, X, Edit2, Check, Eye, AlertTriangle, Loader2,
-  FileBadge, FileVideo, FileSpreadsheet, Folder,
+  Upload, FileText, FileImage, File, Trash2, Download,
+  Search, Grid3X3, List, X, Eye, AlertTriangle, Loader2,
+  FileBadge, FileVideo, FileSpreadsheet, Check, Edit2, FolderOpen,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface Project {
-  id: string;
-  name: string;
-  division: DivisionKey;
-  status: string;
-}
-
-interface FolderRecord {
-  id: string;
-  project_id: string | null;
-  parent_id: string | null;
-  name: string;
-  division: DivisionKey;
-  created_at: string;
-}
-
 interface FileRecord {
   id: string;
-  folder_id: string;
+  folder_id: string | null;
   project_id: string | null;
   name: string;
   storage_path: string;
@@ -45,7 +28,7 @@ interface FileRecord {
 
 interface UploadProgress {
   name: string;
-  progress: number; // 0-100
+  progress: number;
   done: boolean;
   error: boolean;
 }
@@ -65,109 +48,196 @@ function formatDate(iso: string): string {
   });
 }
 
-// ── File type icon ─────────────────────────────────────────────────────────────
-
 function FileTypeIcon({ mime, size = 28 }: { mime: string; size?: number }) {
   const s = { flexShrink: 0 as const };
-  if (mime?.startsWith('image/'))
-    return <FileImage size={size} style={{ ...s, color: '#7254C8' }} />;
-  if (mime?.includes('pdf'))
-    return <FileText size={size} style={{ ...s, color: '#D85A30' }} />;
-  if (mime?.includes('word') || mime?.includes('document'))
-    return <FileBadge size={size} style={{ ...s, color: '#378ADD' }} />;
-  if (mime?.includes('sheet') || mime?.includes('excel') || mime?.includes('csv'))
-    return <FileSpreadsheet size={size} style={{ ...s, color: '#1D9E75' }} />;
-  if (mime?.startsWith('video/'))
-    return <FileVideo size={size} style={{ ...s, color: '#D85A30' }} />;
+  if (mime?.startsWith('image/')) return <FileImage size={size} style={{ ...s, color: '#7254C8' }} />;
+  if (mime?.includes('pdf')) return <FileText size={size} style={{ ...s, color: '#D85A30' }} />;
+  if (mime?.includes('word') || mime?.includes('document')) return <FileBadge size={size} style={{ ...s, color: '#378ADD' }} />;
+  if (mime?.includes('sheet') || mime?.includes('excel') || mime?.includes('csv')) return <FileSpreadsheet size={size} style={{ ...s, color: '#1D9E75' }} />;
+  if (mime?.startsWith('video/')) return <FileVideo size={size} style={{ ...s, color: '#D85A30' }} />;
   return <File size={size} style={{ ...s, color: '#888780' }} />;
 }
 
-// ── Upload Progress Bar ───────────────────────────────────────────────────────
+// ── Upload Modal ──────────────────────────────────────────────────────────────
 
-function UploadProgressItem({ item }: { item: UploadProgress }) {
-  return (
-    <div style={{ marginBottom: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-        <span style={{ fontSize: '0.72rem', fontWeight: 500, color: 'var(--text-primary)' }} className="truncate">
-          {item.name}
-        </span>
-        <span style={{ fontSize: '0.65rem', color: item.error ? '#D85A30' : item.done ? '#1D9E75' : 'var(--text-muted)', flexShrink: 0, marginLeft: 8 }}>
-          {item.error ? 'Erreur' : item.done ? 'Terminé' : `${item.progress}%`}
-        </span>
-      </div>
-      <div className="progress-track" style={{ height: 5 }}>
-        <div
-          className="progress-fill"
-          style={{
-            width: `${item.progress}%`,
-            background: item.error ? '#D85A30' : item.done ? '#1D9E75' : 'linear-gradient(90deg, #4A62D8, #7254C8)',
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
-// ── Lightbox / Preview Modal ──────────────────────────────────────────────────
-
-function PreviewModal({ file, signedUrl, onClose }: { file: FileRecord; signedUrl: string; onClose: () => void }) {
-  const isImage = file.mime_type?.startsWith('image/');
-  const isPdf = file.mime_type?.includes('pdf');
+function UploadModal({
+  files,
+  defaultDivision,
+  onConfirm,
+  onCancel,
+}: {
+  files: File[];
+  defaultDivision?: DivisionKey | null;
+  onConfirm: (division: DivisionKey) => void;
+  onCancel: () => void;
+}) {
+  const [selectedDivision, setSelectedDivision] = useState<DivisionKey>(defaultDivision ?? 'divers');
 
   return (
     <div
       style={{
         position: 'fixed', inset: 0, zIndex: 2000,
-        background: 'rgba(0,0,0,0.7)',
+        background: 'rgba(0,0,0,0.45)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 24,
         backdropFilter: 'blur(6px)',
       }}
-      onClick={onClose}
+      onClick={onCancel}
     >
       <div
-        style={{
-          position: 'relative',
-          maxWidth: '90vw', maxHeight: '90vh',
-          background: 'var(--bg)',
-          borderRadius: 20,
-          overflow: 'hidden',
-          boxShadow: 'var(--raised)',
-          display: 'flex', flexDirection: 'column',
-          minWidth: isPdf ? 700 : undefined,
-          width: isPdf ? '80vw' : undefined,
-        }}
+        className="nm-card"
+        style={{ padding: '32px', maxWidth: 480, width: '100%', borderRadius: 24 }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <FileTypeIcon mime={file.mime_type} size={18} />
-          <span style={{ flex: 1, fontSize: '0.875rem', fontWeight: 500 }} className="truncate">{file.name}</span>
-          <button className="nm-btn" style={{ padding: '5px 8px' }} onClick={onClose}>
-            <X size={14} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+          <div>
+            <h2 className="heading" style={{ fontSize: '1.25rem', margin: 0 }}>Importer des fichiers</h2>
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 4 }}>
+              {files.length} fichier{files.length > 1 ? 's' : ''} sélectionné{files.length > 1 ? 's' : ''}
+            </p>
+          </div>
+          <button className="nm-btn" style={{ padding: '6px 10px' }} onClick={onCancel}>
+            <X size={16} />
           </button>
         </div>
 
-        {/* Content */}
+        {/* File list preview */}
+        <div
+          style={{
+            background: 'var(--bg)',
+            borderRadius: 14,
+            boxShadow: 'var(--inset-xs)',
+            padding: '12px 16px',
+            marginBottom: 24,
+            maxHeight: 160,
+            overflowY: 'auto',
+          }}
+        >
+          {files.map((f, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: i < files.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
+              <FileTypeIcon mime={f.type} size={18} />
+              <span style={{ fontSize: '0.8rem', flex: 1 }} className="truncate">{f.name}</span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', flexShrink: 0 }}>{formatSize(f.size)}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Division picker */}
+        <p style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 12 }}>
+          Enregistrer dans la division
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 28 }}>
+          {DIVISIONS.map((div) => {
+          const key = div.key;
+            const color = getDivisionColor(key);
+            const isSelected = selectedDivision === key;
+            return (
+              <div
+                key={key}
+                onClick={() => setSelectedDivision(key)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
+                  boxShadow: isSelected ? 'var(--inset-sm)' : 'var(--raised-xs)',
+                  background: isSelected ? `${color}12` : 'var(--bg)',
+                  border: isSelected ? `1.5px solid ${color}40` : '1.5px solid transparent',
+                  transition: 'all 0.15s',
+                }}
+              >
+                <div style={{ width: 10, height: 10, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                <span style={{ fontSize: '0.78rem', fontWeight: isSelected ? 600 : 400, color: isSelected ? color : 'var(--text-primary)' }}>
+                  {div.label}
+                </span>
+                {isSelected && <Check size={12} style={{ marginLeft: 'auto', color }} />}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Confirm button */}
+        <button
+          className="nm-btn nm-btn-primary"
+          style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: '0.9rem' }}
+          onClick={() => onConfirm(selectedDivision)}
+        >
+          <Upload size={16} /> Importer dans {DIVISION_MAP[selectedDivision]?.label}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Upload Progress Panel ─────────────────────────────────────────────────────
+
+function UploadProgressPanel({ uploads, onClose }: { uploads: UploadProgress[]; onClose: () => void }) {
+  const allDone = uploads.every(u => u.done || u.error);
+  return (
+    <div
+      style={{
+        position: 'fixed', bottom: 24, right: 24, zIndex: 1500,
+        background: 'var(--bg)', borderRadius: 18,
+        boxShadow: 'var(--raised)', padding: '18px 20px',
+        minWidth: 320, maxWidth: 380,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+        <span style={{ fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+          {allDone ? <Check size={14} style={{ color: '#1D9E75' }} /> : <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />}
+          {allDone ? 'Import terminé !' : 'Import en cours…'}
+        </span>
+        <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }} onClick={onClose}>
+          <X size={14} />
+        </button>
+      </div>
+      {uploads.map((u, i) => (
+        <div key={i} style={{ marginBottom: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+            <span style={{ fontSize: '0.72rem', fontWeight: 500 }} className="truncate">{u.name}</span>
+            <span style={{ fontSize: '0.65rem', color: u.error ? '#D85A30' : u.done ? '#1D9E75' : 'var(--text-muted)', flexShrink: 0, marginLeft: 8 }}>
+              {u.error ? 'Erreur' : u.done ? '✓' : `${u.progress}%`}
+            </span>
+          </div>
+          <div className="progress-track" style={{ height: 4 }}>
+            <div
+              className="progress-fill"
+              style={{
+                width: `${u.progress}%`,
+                background: u.error ? '#D85A30' : u.done ? '#1D9E75' : undefined,
+              }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Preview Modal ─────────────────────────────────────────────────────────────
+
+function PreviewModal({ file, signedUrl, onClose }: { file: FileRecord; signedUrl: string; onClose: () => void }) {
+  const isImage = file.mime_type?.startsWith('image/');
+  const isPdf = file.mime_type?.includes('pdf');
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, backdropFilter: 'blur(6px)' }}
+      onClick={onClose}
+    >
+      <div
+        style={{ position: 'relative', maxWidth: '90vw', maxHeight: '90vh', background: 'var(--bg)', borderRadius: 20, overflow: 'hidden', boxShadow: 'var(--raised)', display: 'flex', flexDirection: 'column', minWidth: isPdf ? 700 : undefined, width: isPdf ? '80vw' : undefined }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <FileTypeIcon mime={file.mime_type} size={18} />
+          <span style={{ flex: 1, fontSize: '0.875rem', fontWeight: 500 }} className="truncate">{file.name}</span>
+          <button className="nm-btn" style={{ padding: '5px 8px' }} onClick={onClose}><X size={14} /></button>
+        </div>
         <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: isImage ? 16 : 0 }}>
-          {isImage && (
-            <img
-              src={signedUrl}
-              alt={file.name}
-              style={{ maxWidth: '80vw', maxHeight: '75vh', borderRadius: 10, objectFit: 'contain' }}
-            />
-          )}
-          {isPdf && (
-            <iframe
-              src={signedUrl}
-              title={file.name}
-              style={{ width: '100%', height: '75vh', border: 'none' }}
-            />
-          )}
+          {isImage && <img src={signedUrl} alt={file.name} style={{ maxWidth: '80vw', maxHeight: '75vh', borderRadius: 10, objectFit: 'contain' }} />}
+          {isPdf && <iframe src={signedUrl} title={file.name} style={{ width: '100%', height: '75vh', border: 'none' }} />}
           {!isImage && !isPdf && (
             <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)' }}>
               <File size={40} style={{ marginBottom: 12, color: 'var(--text-light)' }} />
-              <p style={{ fontSize: '0.875rem' }}>Aperçu non disponible pour ce type de fichier.</p>
+              <p style={{ fontSize: '0.875rem' }}>Aperçu non disponible.</p>
               <a href={signedUrl} download={file.name} className="nm-btn nm-btn-primary" style={{ marginTop: 16, textDecoration: 'none', display: 'inline-flex' }}>
                 <Download size={14} /> Télécharger
               </a>
@@ -183,10 +253,7 @@ function PreviewModal({ file, signedUrl, onClose }: { file: FileRecord; signedUr
 
 function ConfirmDelete({ name, onConfirm, onCancel }: { name: string; onConfirm: () => void; onCancel: () => void }) {
   return (
-    <div
-      style={{ position: 'fixed', inset: 0, zIndex: 1500, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
-      onClick={onCancel}
-    >
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1500, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }} onClick={onCancel}>
       <div className="nm-card" style={{ padding: '28px 32px', maxWidth: 380, width: '100%', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
         <AlertTriangle size={32} style={{ color: '#D85A30', marginBottom: 12 }} />
         <h3 className="heading" style={{ fontSize: '1rem', marginBottom: 8 }}>Supprimer le fichier ?</h3>
@@ -202,64 +269,45 @@ function ConfirmDelete({ name, onConfirm, onCancel }: { name: string; onConfirm:
   );
 }
 
-// ── File Card (grid view) ─────────────────────────────────────────────────────
+// ── File Card (grid) ──────────────────────────────────────────────────────────
 
-function FileCard({
-  file, onDownload, onDelete, onPreview, onRename,
-}: {
-  file: FileRecord;
-  onDownload: () => void;
-  onDelete: () => void;
-  onPreview: () => void;
-  onRename: (newName: string) => void;
+function FileCard({ file, onDownload, onDelete, onPreview, onRename }: {
+  file: FileRecord; onDownload: () => void; onDelete: () => void; onPreview: () => void; onRename: (n: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(file.name);
   const inputRef = useRef<HTMLInputElement>(null);
+  const color = getDivisionColor(file.division);
 
   const commitRename = () => {
     if (name.trim() && name.trim() !== file.name) onRename(name.trim());
     else setName(file.name);
     setEditing(false);
   };
-
   useEffect(() => { if (editing) inputRef.current?.select(); }, [editing]);
 
   return (
     <div
-      style={{
-        background: 'var(--bg)', borderRadius: 14, padding: '18px 14px',
-        boxShadow: 'var(--raised-sm)', display: 'flex', flexDirection: 'column',
-        alignItems: 'center', gap: 8, cursor: 'default', transition: 'box-shadow 0.2s',
-        position: 'relative',
-      }}
+      style={{ background: 'var(--bg)', borderRadius: 14, padding: '18px 14px', boxShadow: 'var(--raised-sm)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, transition: 'box-shadow 0.2s', position: 'relative' }}
       onMouseEnter={e => (e.currentTarget.style.boxShadow = 'var(--raised)')}
       onMouseLeave={e => (e.currentTarget.style.boxShadow = 'var(--raised-sm)')}
     >
+      {/* Division dot */}
+      <div style={{ position: 'absolute', top: 10, right: 10, width: 7, height: 7, borderRadius: '50%', background: color }} title={file.division} />
+
       <div style={{ cursor: 'pointer' }} onClick={onPreview}>
         <FileTypeIcon mime={file.mime_type} size={36} />
       </div>
 
       {editing ? (
         <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <input
-            ref={inputRef}
-            className="nm-input"
-            value={name}
-            onChange={e => setName(e.target.value)}
+          <input ref={inputRef} className="nm-input" value={name} onChange={e => setName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') { setName(file.name); setEditing(false); } }}
-            style={{ fontSize: '0.7rem', padding: '5px 8px', textAlign: 'center' }}
-          />
-          <button className="nm-btn" style={{ padding: '3px 6px', fontSize: '0.65rem', width: '100%', justifyContent: 'center' }} onClick={commitRename}>
-            <Check size={10} /> OK
-          </button>
+            style={{ fontSize: '0.7rem', padding: '5px 8px', textAlign: 'center' }} />
+          <button className="nm-btn" style={{ padding: '3px 6px', fontSize: '0.65rem', width: '100%', justifyContent: 'center' }} onClick={commitRename}><Check size={10} /> OK</button>
         </div>
       ) : (
-        <div
-          style={{ fontSize: '0.72rem', fontWeight: 500, textAlign: 'center', wordBreak: 'break-word', width: '100%', maxHeight: 40, overflow: 'hidden', cursor: 'pointer' }}
-          onDoubleClick={() => setEditing(true)}
-          title={file.name}
-        >
+        <div style={{ fontSize: '0.72rem', fontWeight: 500, textAlign: 'center', wordBreak: 'break-word', width: '100%', maxHeight: 40, overflow: 'hidden', cursor: 'pointer' }} onDoubleClick={() => setEditing(true)} title={file.name}>
           {file.name}
         </div>
       )}
@@ -277,305 +325,138 @@ function FileCard({
   );
 }
 
-// ── File Row (list view) ──────────────────────────────────────────────────────
+// ── File Row (list) ───────────────────────────────────────────────────────────
 
-function FileRow({
-  file, onDownload, onDelete, onPreview, onRename,
-}: {
-  file: FileRecord;
-  onDownload: () => void;
-  onDelete: () => void;
-  onPreview: () => void;
-  onRename: (newName: string) => void;
+function FileRow({ file, onDownload, onDelete, onPreview, onRename }: {
+  file: FileRecord; onDownload: () => void; onDelete: () => void; onPreview: () => void; onRename: (n: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(file.name);
   const inputRef = useRef<HTMLInputElement>(null);
+  const color = getDivisionColor(file.division);
 
   const commitRename = () => {
     if (name.trim() && name.trim() !== file.name) onRename(name.trim());
     else setName(file.name);
     setEditing(false);
   };
-
   useEffect(() => { if (editing) inputRef.current?.select(); }, [editing]);
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderRadius: 10, boxShadow: 'var(--raised-xs)', background: 'var(--bg)' }}>
-      <div style={{ cursor: 'pointer', flexShrink: 0 }} onClick={onPreview}>
-        <FileTypeIcon mime={file.mime_type} size={20} />
-      </div>
-
+      <div style={{ cursor: 'pointer', flexShrink: 0 }} onClick={onPreview}><FileTypeIcon mime={file.mime_type} size={20} /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         {editing ? (
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <input
-              ref={inputRef}
-              className="nm-input"
-              value={name}
-              onChange={e => setName(e.target.value)}
+            <input ref={inputRef} className="nm-input" value={name} onChange={e => setName(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') { setName(file.name); setEditing(false); } }}
-              style={{ fontSize: '0.8rem', padding: '4px 8px', flex: 1 }}
-            />
+              style={{ fontSize: '0.8rem', padding: '4px 8px', flex: 1 }} />
             <button className="nm-btn" style={{ padding: '4px 8px', flexShrink: 0 }} onClick={commitRename}><Check size={12} /></button>
           </div>
         ) : (
           <>
-            <div
-              style={{ fontSize: '0.8rem', fontWeight: 500, cursor: 'pointer' }}
-              className="truncate"
-              onDoubleClick={() => setEditing(true)}
-            >
-              {file.name}
-            </div>
-            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-              {formatSize(file.size_bytes)} · {formatDate(file.created_at)}
+            <div style={{ fontSize: '0.8rem', fontWeight: 500, cursor: 'pointer' }} className="truncate" onDoubleClick={() => setEditing(true)}>{file.name}</div>
+            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0 }} />
+              {DIVISION_MAP[file.division]?.label} · {formatSize(file.size_bytes)} · {formatDate(file.created_at)}
             </div>
           </>
         )}
       </div>
-
       <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
-        <button className="nm-btn" style={{ padding: '5px 8px' }} title="Aperçu" onClick={onPreview}><Eye size={13} /></button>
-        <button className="nm-btn" style={{ padding: '5px 8px' }} title="Télécharger" onClick={onDownload}><Download size={13} /></button>
-        <button className="nm-btn" style={{ padding: '5px 8px' }} title="Renommer" onClick={() => setEditing(true)}><Edit2 size={13} /></button>
-        <button className="nm-btn" style={{ padding: '5px 8px', color: '#D85A30' }} title="Supprimer" onClick={onDelete}><Trash2 size={13} /></button>
+        <button className="nm-btn" style={{ padding: '5px 8px' }} onClick={onPreview}><Eye size={13} /></button>
+        <button className="nm-btn" style={{ padding: '5px 8px' }} onClick={onDownload}><Download size={13} /></button>
+        <button className="nm-btn" style={{ padding: '5px 8px' }} onClick={() => setEditing(true)}><Edit2 size={13} /></button>
+        <button className="nm-btn" style={{ padding: '5px 8px', color: '#D85A30' }} onClick={onDelete}><Trash2 size={13} /></button>
       </div>
     </div>
   );
 }
 
-// ── Sidebar Folder Tree Node ──────────────────────────────────────────────────
-
-interface TreeNodeProps {
-  label: string;
-  level: number;
-  isProject: boolean;
-  color: string;
-  id: string;
-  selectedFolderId: string | null;
-  onSelect: (id: string, label: string) => void;
-  onNewFolder: (parentId: string, divisionKey: DivisionKey) => void;
-  children?: React.ReactNode;
-  divisionKey: DivisionKey;
-}
-
-function TreeNode({ label, level, isProject, color, id, selectedFolderId, onSelect, onNewFolder, children, divisionKey }: TreeNodeProps) {
-  const [expanded, setExpanded] = useState(level === 0);
-  const isSelected = selectedFolderId === id;
-  const hasChildren = !!children;
-
-  return (
-    <div>
-      <div
-        style={{
-          display: 'flex', alignItems: 'center', gap: 4,
-          padding: '6px 8px', paddingLeft: `${8 + level * 14}px`,
-          borderRadius: 8, cursor: 'pointer',
-          background: isSelected ? `rgba(${getDivisionColorRgb(color)},0.12)` : 'transparent',
-          transition: 'background 0.15s',
-        }}
-        onClick={() => { setExpanded(e => !e); if (!isProject) onSelect(id, label); }}
-      >
-        <button
-          style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', color: 'var(--text-muted)', flexShrink: 0 }}
-          onClick={e => { e.stopPropagation(); setExpanded(x => !x); }}
-        >
-          {hasChildren
-            ? (expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />)
-            : <span style={{ width: 11 }} />
-          }
-        </button>
-
-        {isProject
-          ? <div style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
-          : <Folder size={12} style={{ color, flexShrink: 0 }} />
-        }
-
-        <span className="truncate" style={{ fontSize: '0.775rem', fontWeight: isProject ? 600 : 400, flex: 1, color: isSelected ? color : 'var(--text-primary)' }}>
-          {label}
-        </span>
-
-        {!isProject && (
-          <button
-            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 3px', borderRadius: 4, color: 'var(--text-muted)', opacity: 0, transition: 'opacity 0.15s', flexShrink: 0 }}
-            className="tree-action"
-            onClick={e => { e.stopPropagation(); onNewFolder(id, divisionKey); }}
-            title="Nouveau sous-dossier"
-          >
-            <FolderPlus size={10} />
-          </button>
-        )}
-      </div>
-
-      {expanded && children}
-    </div>
-  );
-}
-
-function getDivisionColorRgb(hex: string): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `${r},${g},${b}`;
-}
-
-// ── Main File Manager Page ────────────────────────────────────────────────────
+// ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function FilesPage() {
   const supabase = createSupabaseClient();
 
   const [activeDivision, setActiveDivision] = useState<DivisionKey | null>(null);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [folders, setFolders] = useState<FolderRecord[]>([]);
   const [files, setFiles] = useState<FileRecord[]>([]);
-
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
-  const [selectedFolderName, setSelectedFolderName] = useState<string>('');
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
-
-  // New folder creation
-  const [newFolderParentId, setNewFolderParentId] = useState<string | null>(null);
-  const [newFolderDivision, setNewFolderDivision] = useState<DivisionKey>('divers');
-  const [newFolderName, setNewFolderName] = useState('');
-  const newFolderInputRef = useRef<HTMLInputElement>(null);
-
-  // Upload
   const [isDragOver, setIsDragOver] = useState(false);
-  const [uploads, setUploads] = useState<UploadProgress[]>([]);
-  const [showUploads, setShowUploads] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
 
-  // Preview / confirm delete
+  // Upload flow
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploads, setUploads] = useState<UploadProgress[]>([]);
+  const [showProgress, setShowProgress] = useState(false);
+
+  // Modals
   const [previewFile, setPreviewFile] = useState<FileRecord | null>(null);
   const [previewUrl, setPreviewUrl] = useState('');
   const [deleteFile, setDeleteFile] = useState<FileRecord | null>(null);
 
-  // ── Data loading ───────────────────────────────────────────────────────────
+  // ── Load files ─────────────────────────────────────────────────────────────
 
-  const loadProjects = useCallback(async () => {
-    let q = supabase.from('projects').select('id, name, division, status').order('name');
-    if (activeDivision) q = q.eq('division', activeDivision);
-    const { data } = await q;
-    setProjects(data ?? []);
-  }, [activeDivision, supabase]);
+  useEffect(() => {
+    let isActive = true;
 
-  const loadFolders = useCallback(async () => {
-    let q = supabase.from('folders').select('*').order('name');
-    if (activeDivision) q = q.eq('division', activeDivision);
-    const { data } = await q;
-    setFolders(data ?? []);
-  }, [activeDivision, supabase]);
+    const loadFiles = async () => {
+      let q = supabase.from('files').select('*').order('created_at', { ascending: false });
+      if (activeDivision) q = q.eq('division', activeDivision);
+      if (searchQuery) q = q.ilike('name', `%${searchQuery}%`);
 
-  const loadFiles = useCallback(async () => {
-    if (!selectedFolderId) { setFiles([]); return; }
-    let q = supabase.from('files').select('*').eq('folder_id', selectedFolderId).order('name');
-    if (searchQuery) q = q.ilike('name', `%${searchQuery}%`);
-    const { data } = await q;
-    setFiles(data ?? []);
-  }, [selectedFolderId, searchQuery, supabase]);
+      const { data } = await q;
+      if (isActive) setFiles(data ?? []);
+    };
 
-  useEffect(() => { loadProjects(); }, [loadProjects]);
-  useEffect(() => { loadFolders(); }, [loadFolders]);
-  useEffect(() => { loadFiles(); }, [loadFiles]);
-  useEffect(() => { if (newFolderInputRef.current) newFolderInputRef.current.focus(); }, [newFolderParentId]);
+    void loadFiles();
 
-  // ── Folder CRUD ────────────────────────────────────────────────────────────
+    return () => {
+      isActive = false;
+    };
+  }, [activeDivision, searchQuery, supabase, refreshTick]);
 
-  const handleCreateFolder = async () => {
-    if (!newFolderName.trim() || !newFolderParentId) return;
-    await supabase.from('folders').insert({
-      parent_id: newFolderParentId === '__project__' ? null : newFolderParentId,
-      project_id: selectedProjectId,
-      name: newFolderName.trim(),
-      division: newFolderDivision,
-    });
-    setNewFolderParentId(null);
-    setNewFolderName('');
-    loadFolders();
+  // ── Upload logic ───────────────────────────────────────────────────────────
+
+  const handleImporterClick = () => {
+    fileInputRef.current?.click();
   };
 
-  // ── File CRUD ──────────────────────────────────────────────────────────────
-
-  const handleDownload = async (file: FileRecord) => {
-    const { data } = await supabase.storage.from('files').createSignedUrl(file.storage_path, 3600);
-    if (data?.signedUrl) window.open(data.signedUrl, '_blank');
-  };
-
-  const handlePreview = async (file: FileRecord) => {
-    const { data } = await supabase.storage.from('files').createSignedUrl(file.storage_path, 3600);
-    if (data?.signedUrl) {
-      setPreviewUrl(data.signedUrl);
-      setPreviewFile(file);
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(e.target.files ?? []);
+    if (selected.length > 0) {
+      setPendingFiles(selected);
+      setShowUploadModal(true);
     }
+    e.target.value = '';
   };
 
-  const handleDeleteFile = async (file: FileRecord) => {
-    await supabase.storage.from('files').remove([file.storage_path]);
-    await supabase.from('files').delete().eq('id', file.id);
-    setDeleteFile(null);
-    loadFiles();
-    // Log activity
-    await supabase.from('activity_log').insert({
-      action: 'file_deleted',
-      entity: 'file',
-      entity_id: file.id,
-      metadata: { name: file.name },
-    }).throwOnError().catch(() => null);
-  };
-
-  const handleRenameFile = async (file: FileRecord, newName: string) => {
-    await supabase.from('files').update({ name: newName }).eq('id', file.id);
-    loadFiles();
-  };
-
-  // ── File Upload ────────────────────────────────────────────────────────────
-
-  const uploadFiles = useCallback(async (fileList: File[]) => {
-    if (!selectedFolderId) return;
-    const division = activeDivision ?? 'divers';
-    const projectId = selectedProjectId ?? 'general';
-
-    const initialProgress: UploadProgress[] = fileList.map(f => ({
-      name: f.name, progress: 0, done: false, error: false,
-    }));
+  const handleConfirmUpload = async (division: DivisionKey) => {
+    setShowUploadModal(false);
+    const initialProgress: UploadProgress[] = pendingFiles.map(f => ({ name: f.name, progress: 0, done: false, error: false }));
     setUploads(initialProgress);
-    setShowUploads(true);
+    setShowProgress(true);
 
-    await Promise.all(fileList.map(async (file, i) => {
-      const path = `${division}/${projectId}/${selectedFolderId}/${Date.now()}_${file.name}`;
+    await Promise.all(pendingFiles.map(async (file, i) => {
+      const safeName = file.name.replace(/[^\w.\-]+/g, '_');
+      const path = `${division}/general/${crypto.randomUUID()}_${safeName}`;
       try {
-        const { error: uploadError } = await supabase.storage.from('files').upload(path, file, {
-          upsert: true,
-          // Supplying upload progress
-          onUploadProgress: (progress: any) => {
-            const pct = Math.round((progress.loaded / progress.total) * 90);
-            setUploads(prev => prev.map((u, idx) => idx === i ? { ...u, progress: pct } : u));
-          }
-        });
-
+        const { error: uploadError } = await supabase.storage.from('files').upload(path, file, { upsert: true });
         if (uploadError) throw uploadError;
 
-        // Insert DB record
+        setUploads(prev => prev.map((u, idx) => idx === i ? { ...u, progress: 80 } : u));
+
         await supabase.from('files').insert({
-          folder_id: selectedFolderId,
-          project_id: selectedProjectId,
+          folder_id: null,
+          project_id: null,
           name: file.name,
           storage_path: path,
           size_bytes: file.size,
           mime_type: file.type || 'application/octet-stream',
           division,
         });
-
-        // Log activity
-        await supabase.from('activity_log').insert({
-          action: 'file_uploaded',
-          entity: 'file',
-          metadata: { name: file.name, folder_id: selectedFolderId, size: file.size },
-        }).throwOnError().catch(() => null);
 
         setUploads(prev => prev.map((u, idx) => idx === i ? { ...u, progress: 100, done: true } : u));
       } catch (err) {
@@ -584,311 +465,239 @@ export default function FilesPage() {
       }
     }));
 
+    setPendingFiles([]);
     setTimeout(() => {
-      loadFiles();
+      setRefreshTick(t => t + 1);
+      setShowProgress(false);
       setUploads([]);
-      setShowUploads(false);
-    }, 2000);
-  }, [selectedFolderId, activeDivision, selectedProjectId, supabase, loadFiles]);
-
-  // ── Drag and Drop overlay ─────────────────────────────────────────────────
-
-  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    if (selectedFolderId) setIsDragOver(true);
+    }, 2500);
   };
+
+  // ── Drag & Drop ────────────────────────────────────────────────────────────
+
+  const handleDragOver = (e: DragEvent<HTMLDivElement>) => { e.preventDefault(); setIsDragOver(true); };
   const handleDragLeave = () => setIsDragOver(false);
-  const handleDrop = async (e: DragEvent<HTMLDivElement>) => {
+  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragOver(false);
-    if (!selectedFolderId) return;
-    const fileList = Array.from(e.dataTransfer.files);
-    if (fileList.length > 0) await uploadFiles(fileList);
+    const dropped = Array.from(e.dataTransfer.files);
+    if (dropped.length > 0) {
+      setPendingFiles(dropped);
+      setShowUploadModal(true);
+    }
   };
 
-  // ── Folder tree building ───────────────────────────────────────────────────
+  // ── File actions ───────────────────────────────────────────────────────────
 
-  function buildFolderTree(parentId: string | null, projectId: string): FolderRecord[] {
-    return folders.filter(f => f.project_id === projectId && f.parent_id === parentId);
-  }
+  const handleDownload = async (file: FileRecord) => {
+    const { data } = await supabase.storage.from('files').createSignedUrl(file.storage_path, 3600);
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank');
+  };
 
-  function renderFolderNode(folder: FolderRecord, level: number): React.ReactNode {
-    const color = getDivisionColor(folder.division);
-    const children = buildFolderTree(folder.id, folder.project_id ?? '');
-    return (
-      <TreeNode
-        key={folder.id}
-        id={folder.id}
-        label={folder.name}
-        level={level}
-        isProject={false}
-        color={color}
-        divisionKey={folder.division}
-        selectedFolderId={selectedFolderId}
-        onSelect={(id, name) => { setSelectedFolderId(id); setSelectedFolderName(name); setSelectedProjectId(folder.project_id); }}
-        onNewFolder={(parentId, div) => { setNewFolderParentId(parentId); setNewFolderDivision(div); setSelectedProjectId(folder.project_id); }}
-      >
-        {children.length > 0 ? <>{children.map(c => renderFolderNode(c, level + 1))}</> : undefined}
-      </TreeNode>
-    );
-  }
+  const handlePreview = async (file: FileRecord) => {
+    const { data } = await supabase.storage.from('files').createSignedUrl(file.storage_path, 3600);
+    if (data?.signedUrl) { setPreviewUrl(data.signedUrl); setPreviewFile(file); }
+  };
 
-  const displayedProjects = activeDivision
-    ? projects.filter(p => p.division === activeDivision)
-    : projects;
+  const handleDeleteFile = async (file: FileRecord) => {
+    await supabase.storage.from('files').remove([file.storage_path]);
+    await supabase.from('files').delete().eq('id', file.id);
+    setDeleteFile(null);
+    setRefreshTick(t => t + 1);
+  };
 
-  // ── Breadcrumb ────────────────────────────────────────────────────────────
+  const handleRenameFile = async (file: FileRecord, newName: string) => {
+    await supabase.from('files').update({ name: newName }).eq('id', file.id);
+    setRefreshTick(t => t + 1);
+  };
 
-  const selectedProject = projects.find(p => p.id === selectedProjectId);
+  // ── Group files by division for display ───────────────────────────────────
 
-  // ── Render ────────────────────────────────────────────────────────────────
+
+
+  const filteredFiles = files;
+  const totalCount = filteredFiles.length;
 
   return (
     <AppShell activeDivision={activeDivision} onDivisionChange={setActiveDivision}>
-      {/* Global tree-action hover effect */}
-      <style>{`.tree-action { opacity: 0 !important; } div:hover > div > .tree-action { opacity: 1 !important; }`}</style>
-
       <div
-        style={{ display: 'flex', height: '100%', overflow: 'hidden', position: 'relative' }}
+        style={{ padding: '32px', height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-
-        {/* ── Drag overlay ────────────────────────────────────── */}
-        {isDragOver && selectedFolderId && (
+        {/* ── Drag overlay ── */}
+        {isDragOver && (
           <div style={{
             position: 'absolute', inset: 0, zIndex: 100,
-            background: 'rgba(55,138,221,0.08)',
-            border: '3px dashed #378ADD',
-            borderRadius: 20,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            backdropFilter: 'blur(2px)',
-            pointerEvents: 'none',
+            background: 'rgba(55,138,221,0.08)', border: '3px dashed #378ADD',
+            borderRadius: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backdropFilter: 'blur(2px)', pointerEvents: 'none',
           }}>
             <div style={{ textAlign: 'center' }}>
-              <Upload size={48} style={{ color: '#378ADD', marginBottom: 12 }} />
-              <p style={{ fontSize: '1rem', fontWeight: 600, color: '#378ADD' }}>Déposez vos fichiers ici</p>
+              <Upload size={56} style={{ color: '#378ADD', marginBottom: 12 }} />
+              <p style={{ fontSize: '1.2rem', fontWeight: 700, color: '#378ADD' }}>Déposez vos fichiers ici</p>
             </div>
           </div>
         )}
 
-        {/* ── Left sidebar tree ─────────────────────────────── */}
-        <div
-          className="nm-card"
-          style={{ width: 280, flexShrink: 0, margin: '20px 0 20px 20px', borderRadius: 20, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
-        >
-          {/* Header */}
-          <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid rgba(0,0,0,0.05)', flexShrink: 0 }}>
-            <h2 className="heading" style={{ fontSize: '1rem', margin: 0 }}>Fichiers</h2>
-            <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', margin: '4px 0 0' }}>
-              {projects.length} projet{projects.length !== 1 ? 's' : ''}
+        {/* ── Header ── */}
+        <div className="fade-up" style={{ marginBottom: 28, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
+          <div>
+            <h1 className="heading" style={{ fontSize: '2rem', marginBottom: 4 }}>Fichiers</h1>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+              {totalCount} fichier{totalCount !== 1 ? 's' : ''} {activeDivision ? `· ${DIVISION_MAP[activeDivision]?.label}` : '· toutes les divisions'}
             </p>
           </div>
 
-          {/* Tree */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
-            {displayedProjects.length === 0 && (
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', padding: '12px 8px' }}>Aucun projet trouvé</p>
-            )}
-
-            {displayedProjects.map(project => {
-              const color = getDivisionColor(project.division);
-              const projectFolders = buildFolderTree(null, project.id);
-
-              return (
-                <TreeNode
-                  key={project.id}
-                  id={`proj-${project.id}`}
-                  label={project.name}
-                  level={0}
-                  isProject={true}
-                  color={color}
-                  divisionKey={project.division}
-                  selectedFolderId={selectedFolderId}
-                  onSelect={() => { setSelectedProjectId(project.id); setSelectedFolderId(null); }}
-                  onNewFolder={() => { setNewFolderParentId('__root__'); setNewFolderDivision(project.division); setSelectedProjectId(project.id); }}
-                >
-                  {projectFolders.length > 0 ? (
-                    <>{projectFolders.map(f => renderFolderNode(f, 1))}</>
-                  ) : (
-                    <div style={{ paddingLeft: 32, paddingBottom: 6 }}>
-                      <button
-                        className="nm-btn"
-                        style={{ fontSize: '0.65rem', padding: '4px 8px', color: 'var(--text-muted)' }}
-                        onClick={() => { setNewFolderParentId('__root__'); setNewFolderDivision(project.division); setSelectedProjectId(project.id); }}
-                      >
-                        <FolderPlus size={10} /> Nouveau dossier
-                      </button>
-                    </div>
-                  )}
-                </TreeNode>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* ── Main content ─────────────────────────────────── */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', margin: '20px', overflow: 'hidden', minWidth: 0 }}>
-
-          {/* Toolbar */}
-          <div className="nm-card" style={{ padding: '12px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-            {/* Breadcrumb */}
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--text-muted)', minWidth: 0, overflow: 'hidden' }}>
-              <FolderOpen size={14} style={{ flexShrink: 0 }} />
-              {selectedProject && (
-                <>
-                  <span style={{ color: getDivisionColor(selectedProject.division), fontWeight: 600, whiteSpace: 'nowrap' }}>
-                    {selectedProject.name}
-                  </span>
-                  {selectedFolderName && (
-                    <>
-                      <ChevronRight size={12} style={{ flexShrink: 0 }} />
-                      <span className="truncate" style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{selectedFolderName}</span>
-                    </>
-                  )}
-                </>
-              )}
-              {!selectedProject && <span style={{ color: 'var(--text-light)' }}>Sélectionnez un dossier</span>}
-            </div>
-
+          {/* ── Toolbar ── */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             {/* Search */}
-            <div style={{ position: 'relative', width: 200, flexShrink: 0 }}>
+            <div style={{ position: 'relative' }}>
               <Search size={13} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               <input
                 className="nm-input"
-                placeholder="Rechercher…"
+                placeholder="Rechercher un fichier…"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                style={{ paddingLeft: 30, fontSize: '0.8rem', padding: '7px 10px 7px 30px' }}
+                style={{ paddingLeft: 30, fontSize: '0.8rem', padding: '8px 12px 8px 30px', width: 220 }}
               />
             </div>
 
             {/* View toggle */}
-            <button className={`nm-btn ${viewMode === 'grid' ? 'nm-btn-primary' : ''}`} style={{ padding: '7px 10px' }} onClick={() => setViewMode('grid')}>
-              <Grid3X3 size={14} />
-            </button>
-            <button className={`nm-btn ${viewMode === 'list' ? 'nm-btn-primary' : ''}`} style={{ padding: '7px 10px' }} onClick={() => setViewMode('list')}>
-              <List size={14} />
-            </button>
+            <button className={`nm-btn ${viewMode === 'grid' ? 'nm-btn-primary' : ''}`} style={{ padding: '8px 12px' }} onClick={() => setViewMode('grid')}><Grid3X3 size={15} /></button>
+            <button className={`nm-btn ${viewMode === 'list' ? 'nm-btn-primary' : ''}`} style={{ padding: '8px 12px' }} onClick={() => setViewMode('list')}><List size={15} /></button>
 
-            {/* Upload button */}
+            {/* IMPORT BUTTON — always active */}
             <button
               className="nm-btn nm-btn-primary"
-              style={{ padding: '7px 14px', flexShrink: 0 }}
-              onClick={() => fileInputRef.current?.click()}
-              disabled={!selectedFolderId}
+              style={{ padding: '9px 20px', fontSize: '0.9rem' }}
+              onClick={handleImporterClick}
             >
-              <Upload size={14} /> Importer
+              <Upload size={16} /> Importer
             </button>
+
+            {/* Hidden file input */}
             <input
               ref={fileInputRef}
               type="file"
               multiple
               style={{ display: 'none' }}
-              onChange={e => { if (e.target.files) uploadFiles(Array.from(e.target.files)); e.target.value = ''; }}
+              onChange={handleFileInputChange}
+              accept="*/*"
             />
           </div>
+        </div>
 
-          {/* New folder dialog */}
-          {newFolderParentId && (
-            <div className="nm-card-sm" style={{ padding: '14px 18px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-              <FolderPlus size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-              <input
-                ref={newFolderInputRef}
-                className="nm-input"
-                placeholder="Nom du dossier…"
-                value={newFolderName}
-                onChange={e => setNewFolderName(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleCreateFolder(); if (e.key === 'Escape') { setNewFolderParentId(null); setNewFolderName(''); } }}
-                style={{ flex: 1, fontSize: '0.8rem' }}
-              />
-              <button className="nm-btn nm-btn-primary" style={{ padding: '7px 14px', flexShrink: 0 }} onClick={handleCreateFolder}>Créer</button>
-              <button className="nm-btn" style={{ padding: '7px 10px', flexShrink: 0 }} onClick={() => { setNewFolderParentId(null); setNewFolderName(''); }}><X size={14} /></button>
+        {/* ── Empty state ── */}
+        {filteredFiles.length === 0 && (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+            <div
+              onClick={handleImporterClick}
+              style={{
+                border: '2px dashed rgba(0,0,0,0.12)', borderRadius: 24, padding: '60px 80px',
+                textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(74,98,216,0.04)'; e.currentTarget.style.borderColor = '#4A62D8'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(0,0,0,0.12)'; }}
+            >
+              <FolderOpen size={52} style={{ color: 'var(--text-light)', marginBottom: 16 }} />
+              <p style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600, marginBottom: 6 }}>
+                {searchQuery ? 'Aucun fichier trouvé' : 'Aucun fichier pour le moment'}
+              </p>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-light)' }}>
+                Cliquez ici ou glissez des fichiers pour commencer
+              </p>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Upload progress */}
-          {showUploads && uploads.length > 0 && (
-            <div className="nm-card-sm" style={{ padding: '14px 18px', marginBottom: 12, flexShrink: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />
-                  Import en cours…
-                </span>
-                <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }} onClick={() => setShowUploads(false)}>
-                  <X size={14} />
-                </button>
-              </div>
-              {uploads.map((u, i) => <UploadProgressItem key={i} item={u} />)}
-            </div>
-          )}
-
-          {/* Files area */}
-          <div className="nm-card" style={{ flex: 1, overflow: 'auto', padding: '20px' }}>
-            {!selectedFolderId ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12, color: 'var(--text-muted)' }}>
-                <FolderOpen size={48} style={{ color: 'var(--text-light)' }} />
-                <p style={{ fontSize: '0.875rem', fontWeight: 500 }}>Sélectionnez un dossier dans l'arborescence</p>
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-light)' }}>pour voir et gérer ses fichiers</p>
-              </div>
-            ) : files.length === 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12 }}>
-                <div 
-                  onClick={() => fileInputRef.current?.click()}
-                  style={{ border: '2px dashed rgba(0,0,0,0.12)', borderRadius: 20, padding: '40px 60px', textAlign: 'center', cursor: 'pointer', transition: 'background 0.2s' }}
-                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,0,0,0.02)'}
-                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                >
-                  <Upload size={36} style={{ color: 'var(--text-light)', marginBottom: 12 }} />
-                  <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', fontWeight: 500 }}>Ce dossier est vide</p>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-light)' }}>Glissez des fichiers ici ou cliquez ici pour importer</p>
+        {/* ── Files — grouped by division ── */}
+        {filteredFiles.length > 0 && (
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {activeDivision ? (
+              // Single division view
+              viewMode === 'grid' ? (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 14 }}>
+                  {filteredFiles.map(file => (
+                    <FileCard key={file.id} file={file}
+                      onDownload={() => handleDownload(file)} onDelete={() => setDeleteFile(file)}
+                      onPreview={() => handlePreview(file)} onRename={n => handleRenameFile(file, n)} />
+                  ))}
                 </div>
-              </div>
-            ) : viewMode === 'grid' ? (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 14 }}>
-                {files.map(file => (
-                  <FileCard
-                    key={file.id}
-                    file={file}
-                    onDownload={() => handleDownload(file)}
-                    onDelete={() => setDeleteFile(file)}
-                    onPreview={() => handlePreview(file)}
-                    onRename={name => handleRenameFile(file, name)}
-                  />
-                ))}
-              </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  {filteredFiles.map(file => (
+                    <FileRow key={file.id} file={file}
+                      onDownload={() => handleDownload(file)} onDelete={() => setDeleteFile(file)}
+                      onPreview={() => handlePreview(file)} onRename={n => handleRenameFile(file, n)} />
+                  ))}
+                </div>
+              )
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                {/* Table header */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 120px auto', gap: 12, padding: '6px 16px', fontSize: '0.68rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  <span>Nom</span>
-                  <span>Taille</span>
-                  <span>Date</span>
-                  <span>Actions</span>
-                </div>
-                {files.map(file => (
-                  <FileRow
-                    key={file.id}
-                    file={file}
-                    onDownload={() => handleDownload(file)}
-                    onDelete={() => setDeleteFile(file)}
-                    onPreview={() => handlePreview(file)}
-                    onRename={name => handleRenameFile(file, name)}
-                  />
-                ))}
-              </div>
+              // All divisions — group by division
+              DIVISIONS.map((div) => {
+                const divKey = div.key;
+                const divFiles = filteredFiles.filter(f => f.division === divKey);
+                if (divFiles.length === 0) return null;
+                const color = getDivisionColor(divKey);
+                return (
+                  <div key={divKey} style={{ marginBottom: 32 }}>
+                    {/* Division header */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                      <div style={{ width: 10, height: 10, borderRadius: '50%', background: color }} />
+                      <h3 className="heading" style={{ fontSize: '0.9rem', margin: 0, color }}>{div.label}</h3>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', background: 'var(--bg)', boxShadow: 'var(--raised-xs)', borderRadius: 999, padding: '2px 8px' }}>
+                        {divFiles.length} fichier{divFiles.length > 1 ? 's' : ''}
+                      </span>
+                    </div>
+
+                    {viewMode === 'grid' ? (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 14 }}>
+                        {divFiles.map(file => (
+                          <FileCard key={file.id} file={file}
+                            onDownload={() => handleDownload(file)} onDelete={() => setDeleteFile(file)}
+                            onPreview={() => handlePreview(file)} onRename={n => handleRenameFile(file, n)} />
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                        {divFiles.map(file => (
+                          <FileRow key={file.id} file={file}
+                            onDownload={() => handleDownload(file)} onDelete={() => setDeleteFile(file)}
+                            onPreview={() => handlePreview(file)} onRename={n => handleRenameFile(file, n)} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
-        </div>
+        )}
       </div>
 
-      {/* ── Preview Modal ─────────────────────────────────── */}
+      {/* ── Upload modal ── */}
+      {showUploadModal && pendingFiles.length > 0 && (
+        <UploadModal
+          files={pendingFiles}
+          defaultDivision={activeDivision}
+          onConfirm={handleConfirmUpload}
+          onCancel={() => { setShowUploadModal(false); setPendingFiles([]); }}
+        />
+      )}
+
+      {/* ── Upload progress ── */}
+      {showProgress && uploads.length > 0 && (
+        <UploadProgressPanel uploads={uploads} onClose={() => setShowProgress(false)} />
+      )}
+
+      {/* ── Preview modal ── */}
       {previewFile && previewUrl && (
         <PreviewModal file={previewFile} signedUrl={previewUrl} onClose={() => { setPreviewFile(null); setPreviewUrl(''); }} />
       )}
 
-      {/* ── Delete confirmation ───────────────────────────── */}
+      {/* ── Delete confirm ── */}
       {deleteFile && (
         <ConfirmDelete
           name={deleteFile.name}
@@ -897,7 +706,6 @@ export default function FilesPage() {
         />
       )}
 
-      {/* Spin animation for loader */}
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </AppShell>
   );

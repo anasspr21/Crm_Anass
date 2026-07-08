@@ -625,7 +625,7 @@ export default function FilesPage() {
         color={color}
         divisionKey={folder.division}
         selectedFolderId={selectedFolderId}
-        onSelect={(id, name) => { setSelectedFolderId(id); setSelectedFolderName(name); }}
+        onSelect={(id, name) => { setSelectedFolderId(id); setSelectedFolderName(name); setSelectedProjectId(folder.project_id); }}
         onNewFolder={(parentId, div) => { setNewFolderParentId(parentId); setNewFolderDivision(div); setSelectedProjectId(folder.project_id); }}
       >
         {children.length > 0 ? <>{children.map(c => renderFolderNode(c, level + 1))}</> : undefined}
@@ -834,10 +834,15 @@ export default function FilesPage() {
               </div>
             ) : files.length === 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12 }}>
-                <div style={{ border: '2px dashed rgba(0,0,0,0.12)', borderRadius: 20, padding: '40px 60px', textAlign: 'center' }}>
+                <div 
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{ border: '2px dashed rgba(0,0,0,0.12)', borderRadius: 20, padding: '40px 60px', textAlign: 'center', cursor: 'pointer', transition: 'background 0.2s' }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,0,0,0.02)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >
                   <Upload size={36} style={{ color: 'var(--text-light)', marginBottom: 12 }} />
                   <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', fontWeight: 500 }}>Ce dossier est vide</p>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-light)' }}>Glissez des fichiers ici ou cliquez sur «&nbsp;Importer&nbsp;»</p>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-light)' }}>Glissez des fichiers ici ou cliquez ici pour importer</p>
                 </div>
               </div>
             ) : viewMode === 'grid' ? (
